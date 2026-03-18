@@ -1,11 +1,13 @@
 // ==UserScript==
 // @name         bilibili 字幕复制器
 // @namespace    http://tampermonkey.net/
-// @version      1.3
-// @description  Copy Bilibili subtitles with a left-side button, reusing 378513 when possible and falling back to Bilibili subtitle APIs
+// @version      1.4
+// @description  Copy Bilibili subtitles with a left-side button using the current page subtitle APIs
 // @author       Claude
 // @match        https://www.bilibili.com/video/*
-// @grant        none
+// @grant        GM_xmlhttpRequest
+// @connect      api.bilibili.com
+// @connect      aisubtitle.hdslb.com
 // @license      MIT
 // ==/UserScript==
 
@@ -356,6 +358,65 @@ function getVideoIdentifiers(win) {
     };
 }
 
+function createRequestTransport(win, gmRequest) {
+    const requestFn = gmRequest
+        || ((win && typeof win.GM_xmlhttpRequest === 'function') ? win.GM_xmlhttpRequest : null)
+        || (typeof GM_xmlhttpRequest === 'function' ? GM_xmlhttpRequest : null);
+
+    if (!requestFn) {
+        if (!win || typeof win.fetch !== 'function') {
+            throw new Error('当前环境不支持网络请求');
+        }
+
+        return win.fetch.bind(win);
+    }
+
+    return (url, init = {}) => new Promise((resolve, reject) => {
+        requestFn({
+            method: init.method || 'GET',
+            url,
+            headers: init.headers,
+            anonymous: init.credentials !== 'include',
+            onload: (response) => {
+                const responseText = response.responseText || '';
+                const headerMap = new Map();
+                String(response.responseHeaders || '')
+                    .split(/\r?\n/)
+                    .map((line) => line.trim())
+                    .filter(Boolean)
+                    .forEach((line) => {
+                        const separatorIndex = line.indexOf(':');
+                        if (separatorIndex === -1) {
+                            return;
+                        }
+
+                        headerMap.set(
+                            line.slice(0, separatorIndex).trim().toLowerCase(),
+                            line.slice(separatorIndex + 1).trim()
+                        );
+                    });
+
+                resolve({
+                    ok: response.status >= 200 && response.status < 300,
+                    status: response.status,
+                    headers: {
+                        get(name) {
+                            return headerMap.get(String(name || '').toLowerCase()) || null;
+                        },
+                    },
+                    async json() {
+                        return JSON.parse(responseText);
+                    },
+                    async text() {
+                        return responseText;
+                    },
+                });
+            },
+            onerror: () => reject(new Error('GM_xmlhttpRequest failed')),
+        });
+    });
+}
+
 async function fetchJson(url, fetchImpl, requestInit) {
     const response = await fetchImpl(url, requestInit);
     if (!response || !response.ok) {
@@ -371,10 +432,25 @@ async function fetchSubtitleTextDirect(videoInfo, fetchImpl, doc) {
     }
 
     const configUrl = `https://api.bilibili.com/x/player/v2?aid=${encodeURIComponent(videoInfo.aid)}&cid=${encodeURIComponent(videoInfo.cid)}&bvid=${encodeURIComponent(videoInfo.bvid)}`;
-    const configJson = await fetchJson(configUrl, fetchImpl, { credentials: 'include' });
-    const subtitleData = configJson && configJson.data && configJson.data.subtitle;
-    const tracks = (subtitleData && (subtitleData.subtitles || subtitleData.list)) || [];
-    const track = pickPreferredSubtitleTrack(tracks, findCurrentSubtitleLan(doc));
+    let track = null;
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+        const configJson = await fetchJson(configUrl, fetchImpl, { credentials: 'include' });
+        const subtitleData = configJson && configJson.data && configJson.data.subtitle;
+        const subtitles = subtitleData && subtitleData.subtitles;
+        const tracks = Array.isArray(subtitles) && subtitles.length > 0
+            ? subtitles
+            : (subtitleData && subtitleData.list) || [];
+
+        track = pickPreferredSubtitleTrack(tracks, findCurrentSubtitleLan(doc));
+        if (track && track.subtitle_url) {
+            break;
+        }
+
+        track = null;
+        if (attempt < 2) {
+            await sleep(300);
+        }
+    }
 
     if (!track || !track.subtitle_url) {
         throw new Error('当前视频没有可读取的字幕轨');
@@ -494,25 +570,8 @@ async function handleCopyClick() {
             throw new Error('浏览器不支持剪贴板写入');
         }
 
-        let copiedText = '';
-
-        try {
-            dialog = findCCDialog(document);
-            if (!dialog) {
-                const target = await ensureSubtitleDownloadTarget(document);
-                dispatchDownloadHotspotClick(target, window);
-                dialog = await waitFor(
-                    () => findCCDialog(document),
-                    { timeout: 2500, interval: 100, errorMessage: '未能打开 378513 的字幕下载窗口' }
-                );
-            }
-
-            copiedText = await copyDialogTextAsTxt(dialog, (value) => navigator.clipboard.writeText(value), window);
-        } catch (dialogError) {
-            console.warn('Falling back to direct subtitle fetch:', dialogError);
-            copiedText = await fetchSubtitleTextDirect(getVideoIdentifiers(window), window.fetch.bind(window), document);
-            await navigator.clipboard.writeText(copiedText);
-        }
+        const copiedText = await fetchSubtitleTextDirect(getVideoIdentifiers(window), createRequestTransport(window), document);
+        await navigator.clipboard.writeText(copiedText);
 
         const lineCount = copiedText.split(/\r?\n/).filter(Boolean).length;
         showToast(`字幕已复制${lineCount ? `，共 ${lineCount} 行` : ''}`, false);
@@ -540,6 +599,7 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') {
 if (typeof module !== 'undefined' && module.exports) {
     module.exports = {
         copyDialogTextAsTxt,
+        createRequestTransport,
         dispatchDownloadHotspotClick,
         fetchSubtitleTextDirect,
         findCCDialog,

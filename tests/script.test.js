@@ -8,6 +8,7 @@ const {
   pickPreferredSubtitleTrack,
   subtitleBodyToText,
   fetchSubtitleTextDirect,
+  createRequestTransport,
 } = require('../script.js');
 
 function createAnchor(label) {
@@ -202,4 +203,84 @@ test('fetchSubtitleTextDirect follows the player config and subtitle url', async
   assert.match(calls[0], /aid=123/);
   assert.match(calls[0], /bvid=BV1xx411c7mD/);
   assert.equal(calls[1], 'https://example.com/zh.json');
+});
+
+test('fetchSubtitleTextDirect retries when the player config temporarily returns no usable subtitle url', async () => {
+  let configCalls = 0;
+  const fetchStub = async (url) => {
+    if (url.includes('/x/player/v2')) {
+      configCalls += 1;
+      return {
+        ok: true,
+        async json() {
+          if (configCalls === 1) {
+            return {
+              code: 0,
+              data: {
+                subtitle: {
+                  subtitles: [],
+                },
+              },
+            };
+          }
+
+          return {
+            code: 0,
+            data: {
+              subtitle: {
+                subtitles: [
+                  { lan: 'ai-zh', subtitle_url: '//example.com/zh.json' },
+                ],
+              },
+            },
+          };
+        },
+      };
+    }
+
+    return {
+      ok: true,
+      async json() {
+        return {
+          body: [
+            { content: '重试成功' },
+          ],
+        };
+      },
+    };
+  };
+
+  const text = await fetchSubtitleTextDirect(
+    { aid: 1, bvid: 'BV1test', cid: 2 },
+    fetchStub,
+    { querySelector() { return null; } }
+  );
+
+  assert.equal(text, '重试成功');
+  assert.equal(configCalls, 2);
+});
+
+test('createRequestTransport prefers GM_xmlhttpRequest when available', async () => {
+  let gmCalls = 0;
+  const transport = createRequestTransport(
+    {
+      fetch: async () => {
+        throw new Error('page fetch should not be used');
+      },
+    },
+    (options) => {
+      gmCalls += 1;
+      options.onload({
+        status: 200,
+        responseText: JSON.stringify({ ok: true }),
+        responseHeaders: 'content-type: application/json',
+      });
+    }
+  );
+
+  const response = await transport('https://example.com/data.json', { credentials: 'include' });
+  const json = await response.json();
+
+  assert.equal(json.ok, true);
+  assert.equal(gmCalls, 1);
 });

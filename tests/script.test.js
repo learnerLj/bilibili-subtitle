@@ -9,6 +9,7 @@ const {
   subtitleBodyToText,
   fetchSubtitleTextDirect,
   createRequestTransport,
+  resolveVideoIdentifiers,
 } = require('../script.js');
 
 function createAnchor(label) {
@@ -258,6 +259,49 @@ test('fetchSubtitleTextDirect retries when the player config temporarily returns
 
   assert.equal(text, '重试成功');
   assert.equal(configCalls, 2);
+});
+
+test('resolveVideoIdentifiers falls back to the view api when page globals are unavailable', async () => {
+  const calls = [];
+  const fetchStub = async (url) => {
+    calls.push(url);
+    return {
+      ok: true,
+      async json() {
+        return {
+          code: 0,
+          data: {
+            aid: 1001,
+            bvid: 'BV17bA8ejExY',
+            cid: 3003,
+            pages: [
+              { page: 1, cid: 3003, part: '第一页' },
+            ],
+          },
+        };
+      },
+    };
+  };
+
+  const result = await resolveVideoIdentifiers(
+    {
+      __INITIAL_STATE__: null,
+      location: {
+        href: 'https://www.bilibili.com/video/BV17bA8ejExY/',
+        pathname: '/video/BV17bA8ejExY/',
+        search: '',
+      },
+    },
+    fetchStub
+  );
+
+  assert.deepEqual(result, {
+    aid: 1001,
+    bvid: 'BV17bA8ejExY',
+    cid: 3003,
+  });
+  assert.equal(calls.length, 1);
+  assert.match(calls[0], /x\/web-interface\/view\?bvid=BV17bA8ejExY/);
 });
 
 test('createRequestTransport prefers GM_xmlhttpRequest when available', async () => {

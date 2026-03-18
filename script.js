@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         bilibili 字幕复制器
 // @namespace    http://tampermonkey.net/
-// @version      1.4
+// @version      1.5
 // @description  Copy Bilibili subtitles with a left-side button using the current page subtitle APIs
 // @author       Claude
 // @match        https://www.bilibili.com/video/*
@@ -358,6 +358,44 @@ function getVideoIdentifiers(win) {
     };
 }
 
+function getBvidFromLocation(locationLike) {
+    const pathname = locationLike && locationLike.pathname;
+    const match = String(pathname || '').match(/\/video\/(BV[0-9A-Za-z]+)/);
+    return match ? match[1] : null;
+}
+
+function getPageNumberFromLocation(locationLike) {
+    const search = String((locationLike && locationLike.search) || '');
+    const params = new URLSearchParams(search);
+    const page = Number.parseInt(params.get('p') || '1', 10);
+    return Number.isFinite(page) && page > 0 ? page : 1;
+}
+
+async function resolveVideoIdentifiers(win, fetchImpl) {
+    const direct = getVideoIdentifiers(win);
+    if (direct.aid && direct.bvid && direct.cid) {
+        return direct;
+    }
+
+    const bvid = direct.bvid || getBvidFromLocation(win && win.location);
+    if (!bvid) {
+        return direct;
+    }
+
+    const viewUrl = `https://api.bilibili.com/x/web-interface/view?bvid=${encodeURIComponent(bvid)}`;
+    const viewJson = await fetchJson(viewUrl, fetchImpl, { credentials: 'include' });
+    const viewData = (viewJson && viewJson.data) || {};
+    const pageNumber = getPageNumberFromLocation(win && win.location);
+    const pages = Array.isArray(viewData.pages) ? viewData.pages : [];
+    const currentPage = pages.find((page) => page && Number(page.page) === pageNumber) || pages[0] || {};
+
+    return {
+        aid: direct.aid || viewData.aid || null,
+        bvid: direct.bvid || viewData.bvid || bvid,
+        cid: direct.cid || viewData.cid || currentPage.cid || null,
+    };
+}
+
 function createRequestTransport(win, gmRequest) {
     const requestFn = gmRequest
         || ((win && typeof win.GM_xmlhttpRequest === 'function') ? win.GM_xmlhttpRequest : null)
@@ -570,7 +608,9 @@ async function handleCopyClick() {
             throw new Error('浏览器不支持剪贴板写入');
         }
 
-        const copiedText = await fetchSubtitleTextDirect(getVideoIdentifiers(window), createRequestTransport(window), document);
+        const requestTransport = createRequestTransport(window);
+        const videoInfo = await resolveVideoIdentifiers(window, requestTransport);
+        const copiedText = await fetchSubtitleTextDirect(videoInfo, requestTransport, document);
         await navigator.clipboard.writeText(copiedText);
 
         const lineCount = copiedText.split(/\r?\n/).filter(Boolean).length;
@@ -604,6 +644,7 @@ if (typeof module !== 'undefined' && module.exports) {
         fetchSubtitleTextDirect,
         findCCDialog,
         pickPreferredSubtitleTrack,
+        resolveVideoIdentifiers,
         subtitleBodyToText,
     };
 }

@@ -383,9 +383,52 @@ test('createRequestTransport prefers GM_xmlhttpRequest when available', async ()
     }
   );
 
-  const response = await transport('https://example.com/data.json', { credentials: 'include' });
+  const response = await transport('https://api.bilibili.com/x/player/v2?aid=1&cid=2&bvid=BV1', { credentials: 'include' });
   const json = await response.json();
 
   assert.equal(json.ok, true);
   assert.equal(gmCalls, 1);
+});
+
+test('createRequestTransport uses page fetch for non-api subtitle hosts', async () => {
+  let gmCalls = 0;
+  let fetchCalls = 0;
+  const transport = createRequestTransport(
+    {
+      fetch: async (url) => {
+        fetchCalls += 1;
+        return {
+          ok: true,
+          async json() {
+            return { from: url };
+          },
+          async text() {
+            return JSON.stringify({ from: url });
+          },
+        };
+      },
+    },
+    (options) => {
+      gmCalls += 1;
+      options.onload({
+        status: 200,
+        responseText: JSON.stringify({ from: options.url }),
+        responseHeaders: 'content-type: application/json',
+      });
+    }
+  );
+
+  const subtitleResponse = await transport('https://aisubtitle.hdslb.com/bfs/test.json');
+  const subtitleJson = await subtitleResponse.json();
+
+  assert.equal(fetchCalls, 1);
+  assert.equal(gmCalls, 0);
+  assert.equal(subtitleJson.from, 'https://aisubtitle.hdslb.com/bfs/test.json');
+
+  const apiResponse = await transport('https://api.bilibili.com/x/player/v2?aid=1&cid=2&bvid=BV1');
+  const apiJson = await apiResponse.json();
+
+  assert.equal(fetchCalls, 1);
+  assert.equal(gmCalls, 1);
+  assert.equal(apiJson.from, 'https://api.bilibili.com/x/player/v2?aid=1&cid=2&bvid=BV1');
 });

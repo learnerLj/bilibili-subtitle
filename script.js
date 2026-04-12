@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         bilibili 字幕复制器
 // @namespace    http://tampermonkey.net/
-// @version      1.6
+// @version      1.6.1
 // @description  一键复制 Bilibili 中文字幕纯文本，不带时间戳
 // @author       Claude
 // @match        https://www.bilibili.com/video/*
@@ -411,16 +411,29 @@ function createRequestTransport(win, gmRequest) {
     const requestFn = gmRequest
         || ((win && typeof win.GM_xmlhttpRequest === 'function') ? win.GM_xmlhttpRequest : null)
         || (typeof GM_xmlhttpRequest === 'function' ? GM_xmlhttpRequest : null);
+    const pageFetch = win && typeof win.fetch === 'function' ? win.fetch.bind(win) : null;
 
     if (!requestFn) {
-        if (!win || typeof win.fetch !== 'function') {
+        if (!pageFetch) {
             throw new Error('当前环境不支持网络请求');
         }
 
-        return win.fetch.bind(win);
+        return pageFetch;
     }
 
-    return (url, init = {}) => new Promise((resolve, reject) => {
+    return (url, init = {}) => {
+        if (pageFetch) {
+            try {
+                const parsedUrl = new URL(url, win && win.location ? win.location.href : 'https://www.bilibili.com/');
+                if (parsedUrl.hostname !== 'api.bilibili.com') {
+                    return pageFetch(url, init);
+                }
+            } catch (error) {
+                // Ignore URL parsing failure and fall back to GM_xmlhttpRequest.
+            }
+        }
+
+        return new Promise((resolve, reject) => {
         requestFn({
             method: init.method || 'GET',
             url,
@@ -461,9 +474,10 @@ function createRequestTransport(win, gmRequest) {
                     },
                 });
             },
-            onerror: () => reject(new Error('GM_xmlhttpRequest failed')),
+            onerror: () => reject(new Error(`GM_xmlhttpRequest failed: ${url}`)),
         });
-    });
+        });
+    };
 }
 
 async function fetchJson(url, fetchImpl, requestInit) {

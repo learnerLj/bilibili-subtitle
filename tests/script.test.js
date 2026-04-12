@@ -365,6 +365,62 @@ test('resolveVideoIdentifiers falls back to the view api when page globals are u
   assert.match(calls[0], /x\/web-interface\/view\?bvid=BV17bA8ejExY/);
 });
 
+test('resolveVideoIdentifiers prefers the current url over stale page globals', async () => {
+  const calls = [];
+  const fetchStub = async (url) => {
+    calls.push(url);
+    return {
+      ok: true,
+      async json() {
+        return {
+          code: 0,
+          data: {
+            aid: 9002,
+            bvid: 'BVCurrent123456',
+            cid: 2001,
+            pages: [
+              { page: 1, cid: 2001, part: 'P1' },
+              { page: 2, cid: 2002, part: 'P2' },
+            ],
+          },
+        };
+      },
+    };
+  };
+
+  const result = await resolveVideoIdentifiers(
+    {
+      __INITIAL_STATE__: {
+        aid: 1001,
+        bvid: 'BVOld12345678',
+        cid: 1002,
+        videoData: {
+          aid: 1001,
+          bvid: 'BVOld12345678',
+          cid: 1002,
+          pages: [
+            { page: 1, cid: 1002, part: '旧P1' },
+          ],
+        },
+      },
+      location: {
+        href: 'https://www.bilibili.com/video/BVCurrent123456/?p=2',
+        pathname: '/video/BVCurrent123456/',
+        search: '?p=2',
+      },
+    },
+    fetchStub
+  );
+
+  assert.deepEqual(result, {
+    aid: 9002,
+    bvid: 'BVCurrent123456',
+    cid: 2002,
+  });
+  assert.equal(calls.length, 1);
+  assert.match(calls[0], /x\/web-interface\/view\?bvid=BVCurrent123456/);
+});
+
 test('createRequestTransport prefers GM_xmlhttpRequest when available', async () => {
   let gmCalls = 0;
   const transport = createRequestTransport(

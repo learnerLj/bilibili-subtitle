@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         bilibili 字幕复制器
 // @namespace    http://tampermonkey.net/
-// @version      1.6.1
+// @version      1.6.2
 // @description  一键复制 Bilibili 中文字幕纯文本，不带时间戳
 // @author       Claude
 // @match        https://www.bilibili.com/video/*
@@ -384,11 +384,13 @@ function getPageNumberFromLocation(locationLike) {
 
 async function resolveVideoIdentifiers(win, fetchImpl) {
     const direct = getVideoIdentifiers(win);
-    if (direct.aid && direct.bvid && direct.cid) {
+    const bvidFromLocation = getBvidFromLocation(win && win.location);
+    const bvid = bvidFromLocation || direct.bvid;
+
+    if (!bvidFromLocation && direct.aid && direct.bvid && direct.cid) {
         return direct;
     }
 
-    const bvid = direct.bvid || getBvidFromLocation(win && win.location);
     if (!bvid) {
         return direct;
     }
@@ -401,9 +403,9 @@ async function resolveVideoIdentifiers(win, fetchImpl) {
     const currentPage = pages.find((page) => page && Number(page.page) === pageNumber) || pages[0] || {};
 
     return {
-        aid: direct.aid || viewData.aid || null,
-        bvid: direct.bvid || viewData.bvid || bvid,
-        cid: direct.cid || viewData.cid || currentPage.cid || null,
+        aid: viewData.aid || direct.aid || null,
+        bvid: viewData.bvid || bvid,
+        cid: currentPage.cid || viewData.cid || direct.cid || null,
     };
 }
 

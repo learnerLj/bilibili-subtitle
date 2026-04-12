@@ -124,15 +124,16 @@ test('dispatchDownloadHotspotClick emits a click near the right edge', () => {
   assert.equal(events[0].clientY, 20);
 });
 
-test('pickPreferredSubtitleTrack prefers the current language, then ai-zh, then first', () => {
+test('pickPreferredSubtitleTrack prefers Chinese subtitles before other languages', () => {
   const tracks = [
     { lan: 'ai-en', subtitle_url: '//example.com/en.json' },
+    { lan: 'zh-CN', subtitle_url: '//example.com/zh-cn.json' },
     { lan: 'ai-zh', subtitle_url: '//example.com/zh.json' },
     { lan: 'ai-ja', subtitle_url: '//example.com/ja.json' },
   ];
 
-  assert.equal(pickPreferredSubtitleTrack(tracks, 'ai-ja').lan, 'ai-ja');
-  assert.equal(pickPreferredSubtitleTrack(tracks, 'missing').lan, 'ai-zh');
+  assert.equal(pickPreferredSubtitleTrack(tracks, 'ai-ja').lan, 'zh-CN');
+  assert.equal(pickPreferredSubtitleTrack(tracks, 'missing').lan, 'zh-CN');
   assert.equal(pickPreferredSubtitleTrack([{ lan: 'ai-en' }], null).lan, 'ai-en');
 });
 
@@ -259,6 +260,66 @@ test('fetchSubtitleTextDirect retries when the player config temporarily returns
 
   assert.equal(text, '重试成功');
   assert.equal(configCalls, 2);
+});
+
+test('fetchSubtitleTextDirect falls back to the dm subtitle config when player config returns -404', async () => {
+  const calls = [];
+  const fetchStub = async (url) => {
+    calls.push(url);
+
+    if (url.includes('/x/player/v2')) {
+      return {
+        ok: true,
+        async json() {
+          return {
+            code: -404,
+            message: 'not found',
+          };
+        },
+      };
+    }
+
+    if (url.includes('/x/v2/dm/view')) {
+      return {
+        ok: true,
+        async json() {
+          return {
+            code: 0,
+            data: {
+              subtitle: {
+                subtitles: [
+                  { lan: 'ai-en', subtitle_url: '//example.com/en.json' },
+                  { lan: 'ai-zh', subtitle_url: '//example.com/zh.json' },
+                ],
+              },
+            },
+          };
+        },
+      };
+    }
+
+    return {
+      ok: true,
+      async json() {
+        return {
+          body: [
+            { content: '回退成功' },
+          ],
+        };
+      },
+    };
+  };
+
+  const text = await fetchSubtitleTextDirect(
+    { aid: 1, bvid: 'BV1test', cid: 2 },
+    fetchStub,
+    { querySelector() { return null; } }
+  );
+
+  assert.equal(text, '回退成功');
+  assert.match(calls[0], /x\/player\/v2/);
+  assert.match(calls[1], /x\/v2\/dm\/view/);
+  assert.equal(calls[2], 'https://example.com/zh.json');
 });
 
 test('resolveVideoIdentifiers falls back to the view api when page globals are unavailable', async () => {

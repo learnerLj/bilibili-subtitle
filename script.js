@@ -1,13 +1,12 @@
 // ==UserScript==
 // @name         bilibili 字幕复制器
 // @namespace    http://tampermonkey.net/
-// @version      1.5
-// @description  Copy Bilibili subtitles with a left-side button using the current page subtitle APIs
+// @version      1.6
+// @description  一键复制 Bilibili 中文字幕纯文本，不带时间戳
 // @author       Claude
 // @match        https://www.bilibili.com/video/*
 // @grant        GM_xmlhttpRequest
 // @connect      api.bilibili.com
-// @connect      aisubtitle.hdslb.com
 // @license      MIT
 // ==/UserScript==
 
@@ -311,20 +310,32 @@ function pickPreferredSubtitleTrack(tracks, currentLan) {
         return null;
     }
 
-    const normalizedCurrentLan = normalizeText(currentLan);
-    if (normalizedCurrentLan) {
-        const currentTrack = tracks.find((track) => normalizeText(track && track.lan) === normalizedCurrentLan);
-        if (currentTrack) {
-            return currentTrack;
+    const trackPriority = (track) => {
+        const lan = normalizeText(track && track.lan).toLowerCase();
+        const lanDoc = normalizeText(track && track.lan_doc).toLowerCase();
+
+        if (lan === 'zh-cn' || lan === 'zh-hans' || lan === 'zh') {
+            return 100;
         }
-    }
 
-    const preferredTrack = tracks.find((track) => {
-        const lan = normalizeText(track && track.lan);
-        return lan === 'ai-zh' || lan === 'zh-CN' || lan === 'zh-Hans' || lan === 'zh';
-    });
+        if (lan === 'ai-zh' || lan === 'zh-hant' || lan === 'zh-tw' || lan === 'zh-hk') {
+            return 90;
+        }
 
-    return preferredTrack || tracks[0];
+        if (/中文|汉语|漢語|国语|國語|普通话|普通話|chinese/.test(lanDoc)) {
+            return 80;
+        }
+
+        const normalizedCurrentLan = normalizeText(currentLan).toLowerCase();
+        if (normalizedCurrentLan && lan === normalizedCurrentLan) {
+            return 70;
+        }
+
+        return 0;
+    };
+
+    const sortedTracks = [...tracks].sort((left, right) => trackPriority(right) - trackPriority(left));
+    return sortedTracks[0] || null;
 }
 
 function normalizeSubtitleUrl(url) {
@@ -464,16 +475,29 @@ async function fetchJson(url, fetchImpl, requestInit) {
     return response.json();
 }
 
+async function fetchSubtitleConfig(videoInfo, fetchImpl) {
+    const playerUrl = `https://api.bilibili.com/x/player/v2?aid=${encodeURIComponent(videoInfo.aid)}&cid=${encodeURIComponent(videoInfo.cid)}&bvid=${encodeURIComponent(videoInfo.bvid)}`;
+    const playerJson = await fetchJson(playerUrl, fetchImpl, { credentials: 'include' });
+
+    if (playerJson && playerJson.code === -404) {
+        const fallbackUrl = `https://api.bilibili.com/x/v2/dm/view?aid=${encodeURIComponent(videoInfo.aid)}&oid=${encodeURIComponent(videoInfo.cid)}&type=1`;
+        const fallbackJson = await fetchJson(fallbackUrl, fetchImpl, { credentials: 'include' });
+        if (fallbackJson && fallbackJson.code === 0) {
+            return (fallbackJson.data && fallbackJson.data.subtitle) || {};
+        }
+    }
+
+    return (playerJson && playerJson.data && playerJson.data.subtitle) || {};
+}
+
 async function fetchSubtitleTextDirect(videoInfo, fetchImpl, doc) {
     if (!videoInfo || !videoInfo.aid || !videoInfo.bvid || !videoInfo.cid) {
         throw new Error('无法读取当前视频信息');
     }
 
-    const configUrl = `https://api.bilibili.com/x/player/v2?aid=${encodeURIComponent(videoInfo.aid)}&cid=${encodeURIComponent(videoInfo.cid)}&bvid=${encodeURIComponent(videoInfo.bvid)}`;
     let track = null;
     for (let attempt = 0; attempt < 3; attempt += 1) {
-        const configJson = await fetchJson(configUrl, fetchImpl, { credentials: 'include' });
-        const subtitleData = configJson && configJson.data && configJson.data.subtitle;
+        const subtitleData = await fetchSubtitleConfig(videoInfo, fetchImpl);
         const subtitles = subtitleData && subtitleData.subtitles;
         const tracks = Array.isArray(subtitles) && subtitles.length > 0
             ? subtitles

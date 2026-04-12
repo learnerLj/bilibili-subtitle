@@ -322,6 +322,70 @@ test('fetchSubtitleTextDirect falls back to the dm subtitle config when player c
   assert.equal(calls[2], 'https://example.com/zh.json');
 });
 
+test('fetchSubtitleTextDirect refreshes subtitle config when the subtitle body url expires', async () => {
+  let configCalls = 0;
+  const subtitleCalls = [];
+  const fetchStub = async (url) => {
+    if (url.includes('/x/player/v2')) {
+      configCalls += 1;
+      return {
+        ok: true,
+        async json() {
+          return {
+            code: 0,
+            data: {
+              subtitle: {
+                subtitles: [
+                  {
+                    lan: 'ai-zh',
+                    subtitle_url: configCalls === 1
+                      ? '//example.com/expired.json'
+                      : '//example.com/fresh.json',
+                  },
+                ],
+              },
+            },
+          };
+        },
+      };
+    }
+
+    subtitleCalls.push(url);
+    if (url === 'https://example.com/expired.json') {
+      return {
+        ok: false,
+        async json() {
+          return {};
+        },
+      };
+    }
+
+    return {
+      ok: true,
+      async json() {
+        return {
+          body: [
+            { content: '最新地址成功' },
+          ],
+        };
+      },
+    };
+  };
+
+  const text = await fetchSubtitleTextDirect(
+    { aid: 1, bvid: 'BV1test', cid: 2 },
+    fetchStub,
+    { querySelector() { return null; } }
+  );
+
+  assert.equal(text, '最新地址成功');
+  assert.equal(configCalls, 2);
+  assert.deepEqual(subtitleCalls, [
+    'https://example.com/expired.json',
+    'https://example.com/fresh.json',
+  ]);
+});
+
 test('resolveVideoIdentifiers falls back to the view api when page globals are unavailable', async () => {
   const calls = [];
   const fetchStub = async (url) => {
@@ -419,6 +483,47 @@ test('resolveVideoIdentifiers prefers the current url over stale page globals', 
   });
   assert.equal(calls.length, 1);
   assert.match(calls[0], /x\/web-interface\/view\?bvid=BVCurrent123456/);
+});
+
+test('resolveVideoIdentifiers falls back to player manifest when page globals are missing', async () => {
+  const calls = [];
+  const fetchStub = async (url) => {
+    calls.push(url);
+    return {
+      ok: true,
+      async json() {
+        return {};
+      },
+    };
+  };
+
+  const result = await resolveVideoIdentifiers(
+    {
+      __INITIAL_STATE__: null,
+      playerRaw: {
+        getManifest() {
+          return {
+            aid: 7001,
+            bvid: 'BVManifest1234',
+            cid: 8002,
+          };
+        },
+      },
+      location: {
+        href: 'https://www.bilibili.com/',
+        pathname: '/',
+        search: '',
+      },
+    },
+    fetchStub
+  );
+
+  assert.deepEqual(result, {
+    aid: 7001,
+    bvid: 'BVManifest1234',
+    cid: 8002,
+  });
+  assert.equal(calls.length, 0);
 });
 
 test('createRequestTransport prefers GM_xmlhttpRequest when available', async () => {

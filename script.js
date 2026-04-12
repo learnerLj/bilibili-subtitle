@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         bilibili 字幕复制器
 // @namespace    http://tampermonkey.net/
-// @version      1.6.2
+// @version      1.6.3
 // @description  一键复制 Bilibili 中文字幕纯文本，不带时间戳
 // @author       Claude
 // @match        https://www.bilibili.com/video/*
@@ -357,15 +357,32 @@ function subtitleBodyToText(body) {
         .join('\n');
 }
 
+function getManifestIdentifiers(win) {
+    if (!win || !win.playerRaw || typeof win.playerRaw.getManifest !== 'function') {
+        return {};
+    }
+
+    try {
+        return win.playerRaw.getManifest() || {};
+    } catch (error) {
+        return {};
+    }
+}
+
 function getVideoIdentifiers(win) {
     const state = (win && win.__INITIAL_STATE__) || {};
     const videoData = state.videoData || {};
-    const pageData = (videoData.pages && videoData.pages[0]) || {};
+    const epInfo = state.epInfo || {};
+    const manifestData = getManifestIdentifiers(win);
+    const statePage = Number.parseInt(state.p || '1', 10);
+    const pageData = (Array.isArray(videoData.pages) && (
+        videoData.pages.find((page) => page && Number(page.page) === statePage) || videoData.pages[0]
+    )) || {};
 
     return {
-        aid: state.aid || videoData.aid || null,
-        bvid: state.bvid || videoData.bvid || null,
-        cid: state.cid || videoData.cid || pageData.cid || null,
+        aid: manifestData.aid || epInfo.aid || state.aid || videoData.aid || null,
+        bvid: manifestData.bvid || epInfo.bvid || state.bvid || videoData.bvid || null,
+        cid: manifestData.cid || epInfo.cid || state.cid || videoData.cid || pageData.cid || null,
     };
 }
 
@@ -511,36 +528,37 @@ async function fetchSubtitleTextDirect(videoInfo, fetchImpl, doc) {
         throw new Error('无法读取当前视频信息');
     }
 
-    let track = null;
+    let lastError = null;
     for (let attempt = 0; attempt < 3; attempt += 1) {
-        const subtitleData = await fetchSubtitleConfig(videoInfo, fetchImpl);
-        const subtitles = subtitleData && subtitleData.subtitles;
-        const tracks = Array.isArray(subtitles) && subtitles.length > 0
-            ? subtitles
-            : (subtitleData && subtitleData.list) || [];
+        try {
+            const subtitleData = await fetchSubtitleConfig(videoInfo, fetchImpl);
+            const subtitles = subtitleData && subtitleData.subtitles;
+            const tracks = Array.isArray(subtitles) && subtitles.length > 0
+                ? subtitles
+                : (subtitleData && subtitleData.list) || [];
 
-        track = pickPreferredSubtitleTrack(tracks, findCurrentSubtitleLan(doc));
-        if (track && track.subtitle_url) {
-            break;
+            const track = pickPreferredSubtitleTrack(tracks, findCurrentSubtitleLan(doc));
+            if (!track || !track.subtitle_url) {
+                throw new Error('当前视频没有可读取的字幕轨');
+            }
+
+            const subtitleJson = await fetchJson(normalizeSubtitleUrl(track.subtitle_url), fetchImpl);
+            const text = subtitleBodyToText(subtitleJson && subtitleJson.body);
+            if (!text) {
+                throw new Error('字幕内容为空');
+            }
+
+            return text;
+        } catch (error) {
+            lastError = error;
         }
 
-        track = null;
         if (attempt < 2) {
             await sleep(300);
         }
     }
 
-    if (!track || !track.subtitle_url) {
-        throw new Error('当前视频没有可读取的字幕轨');
-    }
-
-    const subtitleJson = await fetchJson(normalizeSubtitleUrl(track.subtitle_url), fetchImpl);
-    const text = subtitleBodyToText(subtitleJson && subtitleJson.body);
-    if (!text) {
-        throw new Error('字幕内容为空');
-    }
-
-    return text;
+    throw lastError || new Error('复制字幕失败');
 }
 
 function createFloatingButton() {

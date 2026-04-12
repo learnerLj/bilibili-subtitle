@@ -2,7 +2,7 @@
 // @name         bilibili 字幕复制器
 // @namespace    http://tampermonkey.net/
 // @version      1.6.3
-// @description  一键复制 Bilibili 中文字幕纯文本，不带时间戳
+// @description  已停止维护，请改用 bilibiliCCHelper
 // @author       Claude
 // @match        https://www.bilibili.com/video/*
 // @grant        GM_xmlhttpRequest

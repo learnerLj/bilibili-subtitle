@@ -1,5 +1,9 @@
 # Bilibili 字幕复制器
 
+> # 本项目已停止维护
+> 请直接使用 `bilibiliCCHelper`：
+> https://github.com/indefined/UserScripts/tree/master/bilibiliCCHelper
+
 一个简单易用的浏览器脚本，用于在哔哩哔哩(Bilibili)视频页面左侧提供一键复制字幕按钮。点击左侧按钮后，脚本会直接按当前页面的 `aid/bvid/cid` 请求 B 站字幕接口，默认优先中文轨，并复制不带时间戳的纯文本结果。
 
 参考实现：
